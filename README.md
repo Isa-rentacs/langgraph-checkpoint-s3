@@ -369,34 +369,228 @@ The library provides comprehensive error handling:
 - **Async Concurrency**: Async version uploads writes concurrently for better performance
 - **Prefix Organization**: Hierarchical structure enables efficient prefix-based operations
 
-## Development
+## Building the Package
 
-### Running Tests
+This project uses modern Python packaging with `hatchling` as the build backend. Here are the steps to build and develop the package:
+
+### Prerequisites
+
+- Python 3.10 or higher
+- pip (latest version recommended)
+
+### Development Setup
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/yourusername/langgraph-checkpoint-s3.git
+   cd langgraph-checkpoint-s3
+   ```
+
+2. **Install in development mode:**
+   ```bash
+   # Install the package in editable mode with development dependencies
+   pip install -e ".[dev]"
+   ```
+
+3. **Verify installation:**
+   ```bash
+   # Test that the CLI tool is available
+   s3-checkpoint --help
+   
+   # Test that the package can be imported
+   python -c "from langgraph_checkpoint_s3 import S3CheckpointSaver; print('Import successful')"
+   ```
+
+### Building Distribution Packages
+
+#### Using pip (recommended)
 
 ```bash
-# Install development dependencies
-pip install -e ".[dev]"
+# Install build dependencies
+pip install build
 
-# Run tests
-pytest
+# Build source distribution and wheel
+python -m build
 
-# Run tests with coverage
-pytest --cov=src/langgraph_checkpoint_s3 --cov-report=html
+# This creates:
+# - dist/langgraph_checkpoint_s3-0.1.0.tar.gz (source distribution)
+# - dist/langgraph_checkpoint_s3-0.1.0-py3-none-any.whl (wheel)
 ```
 
-### Code Quality
+#### Using hatch (alternative)
+
+If you prefer using hatch directly:
 
 ```bash
-# Format code
-black src tests
-isort src tests
+# Install hatch
+pip install hatch
 
-# Lint code
-flake8 src tests
+# Build the package
+hatch build
+
+# Build only wheel
+hatch build --target wheel
+
+# Build only source distribution
+hatch build --target sdist
+```
+
+### Development Workflows
+
+#### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run tests with coverage report
+pytest --cov=src/langgraph_checkpoint_s3 --cov-report=html
+
+# Run tests for specific module
+pytest tests/test_checkpoint.py
+
+# Run async tests specifically
+pytest tests/test_s3_checkpoint.py -k "async"
+```
+
+#### Code Quality and Formatting
+
+```bash
+# Format code with ruff
+ruff format src tests
+
+# Lint and fix issues
+ruff check --fix src tests
+
+# Just check without fixing
+ruff check src tests
 
 # Type checking
 mypy src
 ```
+
+#### Using Hatch Environments
+
+This project is configured with hatch environments for different tasks:
+
+```bash
+# Run tests in hatch environment
+hatch run test
+
+# Run tests with coverage
+hatch run test-cov
+
+# Open coverage report in browser
+hatch run cov-report
+
+# Lint code
+hatch run lint:check
+
+# Format code
+hatch run lint:format
+
+# Type checking
+hatch run type-check:check
+```
+
+#### Pre-commit Hooks
+
+Set up pre-commit hooks for automatic code quality checks:
+
+```bash
+# Install pre-commit
+pip install pre-commit
+
+# Install the git hook scripts
+pre-commit install
+
+# Run against all files (optional)
+pre-commit run --all-files
+```
+
+### Testing with Different Python Versions
+
+Use hatch to test against multiple Python versions:
+
+```bash
+# Test against all configured Python versions (3.10-3.14)
+hatch run all:test
+
+# Test against specific Python version
+hatch run +py=3.11 test
+```
+
+### Publishing the Package
+
+#### To Test PyPI (recommended for testing)
+
+```bash
+# Install twine
+pip install twine
+
+# Build the package
+python -m build
+
+# Upload to Test PyPI
+twine upload --repository testpypi dist/*
+
+# Test installation from Test PyPI
+pip install --index-url https://test.pypi.org/simple/ langgraph-checkpoint-s3
+```
+
+#### To Production PyPI
+
+```bash
+# Upload to PyPI (requires proper credentials)
+twine upload dist/*
+```
+
+### Environment Variables for Development
+
+For testing with real S3, set up these environment variables:
+
+```bash
+# AWS credentials (if not using AWS CLI profiles)
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_DEFAULT_REGION=us-east-1
+
+# Test bucket for integration tests
+export TEST_S3_BUCKET=your-test-bucket
+export TEST_S3_PREFIX=test-checkpoints/
+```
+
+### Troubleshooting Build Issues
+
+#### Common Issues
+
+1. **Missing build dependencies:**
+   ```bash
+   pip install --upgrade pip setuptools wheel build
+   ```
+
+2. **Import errors during development:**
+   ```bash
+   # Reinstall in development mode
+   pip install -e ".[dev]" --force-reinstall
+   ```
+
+3. **Type checking errors:**
+   ```bash
+   # Install type stubs
+   pip install types-aioboto3[s3] boto3-stubs[s3]
+   ```
+
+4. **Test failures:**
+   ```bash
+   # Clear pytest cache
+   pytest --cache-clear
+   
+   # Run tests with verbose output
+   pytest -v
+   ```
+
+## Development
 
 ## Contributing
 

@@ -66,7 +66,11 @@ class S3CheckpointReader:
 
                     # Parse the key to extract checkpoint_ns and checkpoint_id
                     # Key format: {prefix}checkpoints/{thread_id}/{checkpoint_ns_safe}/{checkpoint_id}.json
-                    parts = key[len(self.prefix) :].split("/")
+                    # Remove the prefix to get the relative path
+                    relative_key = key[len(self.prefix):]
+                    parts = relative_key.split("/")
+                    
+                    # Validate key structure: should be checkpoints/{thread_id}/{checkpoint_ns_safe}/{checkpoint_id}.json
                     if len(parts) < 4 or parts[0] != "checkpoints":
                         continue
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+import aioboto3
 from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
@@ -49,15 +51,16 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
     Args:
         bucket_name: The name of the S3 bucket to store checkpoints
         prefix: Optional prefix for checkpoint keys (default: "checkpoints/")
-        session: Optional aioboto3 session. If not provided, will create one.
+        session: Optional aioboto3 session. If not provided, will create a default one.
 
     Example:
         >>> import aioboto3
-        >>> async with AsyncS3CheckpointSaver("my-bucket") as saver:
-        ...     graph = builder.compile(checkpointer=saver)
-        ...     config = {"configurable": {"thread_id": "thread-1"}}
-        ...     async for event in graph.astream_events(..., config, version="v1"):
-        ...         print(event)
+        >>> session = aioboto3.Session()
+        >>> saver = AsyncS3CheckpointSaver("my-bucket", session=session)
+        >>> graph = builder.compile(checkpointer=saver)
+        >>> config = {"configurable": {"thread_id": "thread-1"}}
+        >>> async for event in graph.astream_events(..., config, version="v1"):
+        ...     print(event)
     """
 
     def __init__(
@@ -65,7 +68,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         bucket_name: str,
         *,
         prefix: str = "checkpoints/",
-        s3_client: S3Client | None = None,
+        session: aioboto3.Session | None = None,
         **kwargs,
     ) -> None:
         """Initialize the async S3 checkpoint saver.
@@ -73,28 +76,36 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         Args:
             bucket_name: The name of the S3 bucket to store checkpoints
             prefix: Optional prefix for checkpoint keys (default: "checkpoints/")
-            s3_client: Optional aioboto3 S3 client instance. If not provided, will create one.
+            session: Optional aioboto3 session. If not provided, will create a default one.
         """
         super().__init__(**kwargs)
         self.bucket_name = bucket_name
         self.prefix = prefix.rstrip("/") + "/" if prefix else ""
-        self.s3_client = s3_client
+        self.session = session or aioboto3.Session()
         self.lock = asyncio.Lock()
+        self.loop = asyncio.get_running_loop()
+
+    @asynccontextmanager
+    async def _get_s3_client(self) -> AsyncIterator[S3Client]:
+        """Get an S3 client using the session's async context manager."""
+        async with self.session.client("s3") as client:
+            yield client
 
     # Sync methods - delegate to async versions with proper thread handling
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         """Get a checkpoint tuple from S3 (sync wrapper)."""
         try:
-            asyncio.get_running_loop()
-            # We're in an async context, but this is a sync call
-            # This should not be used in async code - use aget_tuple instead
-            raise RuntimeError(
-                "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
-                "async context. Use aget_tuple() instead."
-            )
+            if asyncio.get_running_loop() is self.loop:
+                # We're in an async context, but this is a sync call
+                # This should not be used in async code - use aget_tuple instead
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
+                    "async context. Use aget_tuple() instead."
+                )
         except RuntimeError:
-            # No event loop running, we can create one
-            return asyncio.run(self.aget_tuple(config))
+            pass
+
+        return asyncio.run_coroutine_threadsafe(self.aget_tuple(config), self.loop).result()
 
     def list(
         self,
@@ -106,21 +117,25 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
     ) -> Iterator[CheckpointTuple]:
         """List checkpoints from S3 (sync wrapper)."""
         try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
-                "async context. Use alist() instead."
-            )
+            if asyncio.get_running_loop() is self.loop:
+                # We're in an async context, but this is a sync call
+                # This should not be used in async code - use alist instead
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
+                    "async context. Use alist() instead."
+                )
         except RuntimeError:
-            # No event loop running, we can create one
-            async def _list():
-                results = []
-                async for item in self.alist(config, filter=filter, before=before, limit=limit):
-                    results.append(item)
-                return results
+            pass
 
-            results = asyncio.run(_list())
-            return iter(results)
+        aiter_ = self.alist(config, filter=filter, before=before, limit=limit)
+        while True:
+            try:
+                yield asyncio.run_coroutine_threadsafe(
+                    anext(aiter_),  # type: ignore[arg-type]  # noqa: F821
+                    self.loop,
+                ).result()
+            except StopAsyncIteration:
+                break
 
     def put(
         self,
@@ -131,12 +146,17 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
     ) -> RunnableConfig:
         """Save a checkpoint to S3 (sync wrapper)."""
         try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an async context. Use aput() instead."
-            )
+            if asyncio.get_running_loop() is self.loop:
+                # We're in an async context, but this is a sync call
+                # This should not be used in async code - use aput instead
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
+                    "async context. Use aput() instead."
+                )
         except RuntimeError:
-            return asyncio.run(self.aput(config, checkpoint, metadata, new_versions))
+            pass
+
+        return asyncio.run_coroutine_threadsafe(self.aput(config, checkpoint, metadata, new_versions), self.loop).result()
 
     def put_writes(
         self,
@@ -147,24 +167,32 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
     ) -> None:
         """Store intermediate writes (sync wrapper)."""
         try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
-                "async context. Use aput_writes() instead."
-            )
+            if asyncio.get_running_loop() is self.loop:
+                # We're in an async context, but this is a sync call
+                # This should not be used in async code - use aput_writes instead
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
+                    "async context. Use aput_writes() instead."
+                )
         except RuntimeError:
-            asyncio.run(self.aput_writes(config, writes, task_id, task_path))
+            pass
+
+        asyncio.run_coroutine_threadsafe(self.aput_writes(config, writes, task_id, task_path), self.loop).result()
 
     def delete_thread(self, thread_id: str) -> None:
         """Delete all data for a thread (sync wrapper)."""
         try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
-                "async context. Use adelete_thread() instead."
-            )
+            if asyncio.get_running_loop() is self.loop:
+                # We're in an async context, but this is a sync call
+                # This should not be used in async code - use adelete_thread instead
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AsyncS3CheckpointSaver are not allowed from an "
+                    "async context. Use adelete_thread() instead."
+                )
         except RuntimeError:
-            asyncio.run(self.adelete_thread(thread_id))
+            pass
+
+        asyncio.run_coroutine_threadsafe(self.adelete_thread(thread_id), self.loop).result()
 
     # Async implementations
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
@@ -184,129 +212,131 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         thread_id = str(config["configurable"]["thread_id"])
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
-        if checkpoint_id := get_checkpoint_id(config):
-            # Get specific checkpoint
-            key = get_checkpoint_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
-            try:
-                response = await self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
-                checkpoint_data = await response["Body"].read()
-                checkpoint_data = checkpoint_data.decode("utf-8")
-                checkpoint, metadata = deserialize_checkpoint_data(checkpoint_data, self.serde)
+        async with self._get_s3_client() as s3_client:
+            if checkpoint_id := get_checkpoint_id(config):
+                # Get specific checkpoint
+                key = get_checkpoint_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
+                try:
+                    response = await s3_client.get_object(Bucket=self.bucket_name, Key=key)
+                    checkpoint_data = await response["Body"].read()
+                    checkpoint_data = checkpoint_data.decode("utf-8")
+                    checkpoint, metadata = deserialize_checkpoint_data(checkpoint_data, self.serde)
 
-                # Update config with checkpoint_id if not present
-                if not get_checkpoint_id(config):
-                    config = {
+                    # Update config with checkpoint_id if not present
+                    if not get_checkpoint_id(config):
+                        config = {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": checkpoint_ns,
+                                "checkpoint_id": checkpoint_id,
+                            }
+                        }
+
+                    # Get pending writes
+                    pending_writes = await self._aget_writes(thread_id, checkpoint_ns, checkpoint_id)
+
+                    # Determine parent config
+                    parent_config = None
+                    if "parents" in metadata and checkpoint_ns in metadata["parents"]:
+                        parent_checkpoint_id = metadata["parents"][checkpoint_ns]
+                        parent_config = {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": checkpoint_ns,
+                                "checkpoint_id": parent_checkpoint_id,
+                            }
+                        }
+
+                    return CheckpointTuple(
+                        config=config,
+                        checkpoint=checkpoint,
+                        metadata=metadata,
+                        parent_config=parent_config,
+                        pending_writes=pending_writes,
+                    )
+
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "NoSuchKey":
+                        return None
+                    raise RuntimeError(f"Failed to get checkpoint: {e}") from e
+            else:
+                # Get latest checkpoint - list checkpoints and get the most recent
+                checkpoint_ns_safe = normalize_checkpoint_ns(checkpoint_ns)
+                prefix = f"{self.prefix}checkpoints/{thread_id}/{checkpoint_ns_safe}/"
+
+                try:
+                    paginator = s3_client.get_paginator("list_objects_v2")
+                    page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+
+                    objects = []
+                    async for page in page_iterator:
+                        if "Contents" in page:
+                            objects.extend(page["Contents"])
+
+                    if not objects:
+                        return None
+
+                    # Sort by key (checkpoint_id) in descending order to get latest
+                    objects = sorted(objects, key=lambda x: x["Key"], reverse=True)
+
+                    # Extract checkpoint_id from the key
+                    latest_key = objects[0]["Key"]
+                    latest_checkpoint_id = latest_key.split("/")[-1].replace(".json", "")
+
+                    # Recursively call with specific checkpoint_id
+                    config_with_id = {
                         "configurable": {
                             "thread_id": thread_id,
                             "checkpoint_ns": checkpoint_ns,
-                            "checkpoint_id": checkpoint_id,
+                            "checkpoint_id": latest_checkpoint_id,
                         }
                     }
+                    return await self.aget_tuple(config_with_id)
 
-                # Get pending writes
-                pending_writes = await self._aget_writes(thread_id, checkpoint_ns, checkpoint_id)
-
-                # Determine parent config
-                parent_config = None
-                if "parents" in metadata and checkpoint_ns in metadata["parents"]:
-                    parent_checkpoint_id = metadata["parents"][checkpoint_ns]
-                    parent_config = {
-                        "configurable": {
-                            "thread_id": thread_id,
-                            "checkpoint_ns": checkpoint_ns,
-                            "checkpoint_id": parent_checkpoint_id,
-                        }
-                    }
-
-                return CheckpointTuple(
-                    config=config,
-                    checkpoint=checkpoint,
-                    metadata=metadata,
-                    parent_config=parent_config,
-                    pending_writes=pending_writes,
-                )
-
-            except ClientError as e:
-                if e.response["Error"]["Code"] == "NoSuchKey":
-                    return None
-                raise RuntimeError(f"Failed to get checkpoint: {e}") from e
-        else:
-            # Get latest checkpoint - list checkpoints and get the most recent
-            checkpoint_ns_safe = normalize_checkpoint_ns(checkpoint_ns)
-            prefix = f"{self.prefix}checkpoints/{thread_id}/{checkpoint_ns_safe}/"
-
-            try:
-                paginator = self.s3_client.get_paginator("list_objects_v2")
-                page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
-
-                objects = []
-                async for page in page_iterator:
-                    if "Contents" in page:
-                        objects.extend(page["Contents"])
-
-                if not objects:
-                    return None
-
-                # Sort by key (checkpoint_id) in descending order to get latest
-                objects = sorted(objects, key=lambda x: x["Key"], reverse=True)
-
-                # Extract checkpoint_id from the key
-                latest_key = objects[0]["Key"]
-                latest_checkpoint_id = latest_key.split("/")[-1].replace(".json", "")
-
-                # Recursively call with specific checkpoint_id
-                config_with_id = {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "checkpoint_ns": checkpoint_ns,
-                        "checkpoint_id": latest_checkpoint_id,
-                    }
-                }
-                return await self.aget_tuple(config_with_id)
-
-            except ClientError as e:
-                raise RuntimeError(f"Failed to list checkpoints: {e}") from e
+                except ClientError as e:
+                    raise RuntimeError(f"Failed to list checkpoints: {e}") from e
 
     async def _aget_writes(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> list[tuple[str, str, Any]]:
         """Get all writes for a specific checkpoint asynchronously."""
         writes_prefix = get_writes_prefix(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
         writes = []
 
-        try:
-            paginator = self.s3_client.get_paginator("list_objects_v2")
-            page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=writes_prefix)
+        async with self._get_s3_client() as s3_client:
+            try:
+                paginator = s3_client.get_paginator("list_objects_v2")
+                page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=writes_prefix)
 
-            async for page in page_iterator:
-                if "Contents" not in page:
-                    continue
+                async for page in page_iterator:
+                    if "Contents" not in page:
+                        continue
 
-                for obj in page["Contents"]:
-                    key = obj["Key"]
-                    # Extract task_id and idx from filename
-                    filename = key.split("/")[-1].replace(".json", "")
-                    if "_" in filename:
-                        task_id, idx_str = filename.rsplit("_", 1)
-                        try:
-                            idx = int(idx_str)
-                        except ValueError:
-                            continue
+                    for obj in page["Contents"]:
+                        key = obj["Key"]
+                        # Extract task_id and idx from filename
+                        filename = key.split("/")[-1].replace(".json", "")
+                        if "_" in filename:
+                            task_id, idx_str = filename.rsplit("_", 1)
+                            try:
+                                idx = int(idx_str)
+                            except ValueError:
+                                continue
 
-                        # Get the write data
-                        response = await self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
-                        write_data = await response["Body"].read()
-                        write_data = write_data.decode("utf-8")
-                        channel, value = deserialize_write_data(write_data, self.serde)
+                            # Get the write data
+                            response = await s3_client.get_object(Bucket=self.bucket_name, Key=key)
+                            write_data = await response["Body"].read()
+                            write_data = write_data.decode("utf-8")
+                            channel, value = deserialize_write_data(write_data, self.serde)
 
-                        writes.append((task_id, channel, value, idx))
+                            writes.append((task_id, channel, value, idx))
 
-            # Sort writes by task_id and idx
-            writes.sort(key=lambda x: (x[0], x[3]))
-            # Remove idx from the final result to match expected format
-            return [(task_id, channel, value) for task_id, channel, value, idx in writes]
+                # Sort writes by task_id and idx
+                writes.sort(key=lambda x: (x[0], x[3]))
+                # Remove idx from the final result to match expected format
+                return [(task_id, channel, value) for task_id, channel, value, idx in writes]
 
-        except ClientError as e:
-            logger.warning(f"Failed to get writes for checkpoint {checkpoint_id}: {e}")
-            return []
+            except ClientError as e:
+                logger.warning(f"Failed to get writes for checkpoint {checkpoint_id}: {e}")
+                return []
 
     async def alist(
         self,
@@ -343,65 +373,66 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         if before:
             before_checkpoint_id = get_checkpoint_id(before)
 
-        try:
-            paginator = self.s3_client.get_paginator("list_objects_v2")
-            page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+        async with self._get_s3_client() as s3_client:
+            try:
+                paginator = s3_client.get_paginator("list_objects_v2")
+                page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
 
-            checkpoints = []
-            async for page in page_iterator:
-                if "Contents" not in page:
-                    continue
-
-                for obj in page["Contents"]:
-                    key = obj["Key"]
-                    if not key.endswith(".json"):
+                checkpoints = []
+                async for page in page_iterator:
+                    if "Contents" not in page:
                         continue
 
-                    # Parse the key to extract thread_id, checkpoint_ns, checkpoint_id
-                    parts = key[len(self.prefix) :].split("/")
-                    if len(parts) < 4 or parts[0] != "checkpoints":
-                        continue
-
-                    key_thread_id = parts[1]
-                    key_checkpoint_ns_safe = parts[2]
-                    key_checkpoint_id = parts[3].replace(".json", "")
-                    key_checkpoint_ns = denormalize_checkpoint_ns(key_checkpoint_ns_safe)
-
-                    # Apply before filter
-                    if before_checkpoint_id and key_checkpoint_id >= before_checkpoint_id:
-                        continue
-
-                    checkpoints.append((key_thread_id, key_checkpoint_ns, key_checkpoint_id, obj["LastModified"]))
-
-            # Sort by checkpoint_id descending (newest first)
-            checkpoints.sort(key=lambda x: x[2], reverse=True)
-
-            # Apply limit
-            if limit:
-                checkpoints = checkpoints[:limit]
-
-            # Yield checkpoint tuples
-            for thread_id, checkpoint_ns, checkpoint_id, _ in checkpoints:
-                checkpoint_config = {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "checkpoint_ns": checkpoint_ns,
-                        "checkpoint_id": checkpoint_id,
-                    }
-                }
-
-                checkpoint_tuple = await self.aget_tuple(checkpoint_config)
-                if checkpoint_tuple:
-                    # Apply metadata filter if provided
-                    if filter:
-                        metadata_matches = all(checkpoint_tuple.metadata.get(k) == v for k, v in filter.items())
-                        if not metadata_matches:
+                    for obj in page["Contents"]:
+                        key = obj["Key"]
+                        if not key.endswith(".json"):
                             continue
 
-                    yield checkpoint_tuple
+                        # Parse the key to extract thread_id, checkpoint_ns, checkpoint_id
+                        parts = key[len(self.prefix) :].split("/")
+                        if len(parts) < 4 or parts[0] != "checkpoints":
+                            continue
 
-        except ClientError as e:
-            raise RuntimeError(f"Failed to list checkpoints: {e}") from e
+                        key_thread_id = parts[1]
+                        key_checkpoint_ns_safe = parts[2]
+                        key_checkpoint_id = parts[3].replace(".json", "")
+                        key_checkpoint_ns = denormalize_checkpoint_ns(key_checkpoint_ns_safe)
+
+                        # Apply before filter
+                        if before_checkpoint_id and key_checkpoint_id >= before_checkpoint_id:
+                            continue
+
+                        checkpoints.append((key_thread_id, key_checkpoint_ns, key_checkpoint_id, obj["LastModified"]))
+
+                # Sort by checkpoint_id descending (newest first)
+                checkpoints.sort(key=lambda x: x[2], reverse=True)
+
+                # Apply limit
+                if limit:
+                    checkpoints = checkpoints[:limit]
+
+                # Yield checkpoint tuples
+                for thread_id, checkpoint_ns, checkpoint_id, _ in checkpoints:
+                    checkpoint_config = {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": checkpoint_id,
+                        }
+                    }
+
+                    checkpoint_tuple = await self.aget_tuple(checkpoint_config)
+                    if checkpoint_tuple:
+                        # Apply metadata filter if provided
+                        if filter:
+                            metadata_matches = all(checkpoint_tuple.metadata.get(k) == v for k, v in filter.items())
+                            if not metadata_matches:
+                                continue
+
+                        yield checkpoint_tuple
+
+            except ClientError as e:
+                raise RuntimeError(f"Failed to list checkpoints: {e}") from e
 
     async def aput(
         self,
@@ -435,26 +466,27 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         checkpoint_data = serialize_checkpoint_data(checkpoint, full_metadata, self.serde)
         key = get_checkpoint_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
 
-        try:
-            await self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=key,
-                Body=checkpoint_data,
-                ContentType="application/json",
-            )
+        async with self._get_s3_client() as s3_client:
+            try:
+                await s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=key,
+                    Body=checkpoint_data,
+                    ContentType="application/json",
+                )
 
-            logger.info(f"Checkpoint saved to s3://{self.bucket_name}/{key}")
+                logger.info(f"Checkpoint saved to s3://{self.bucket_name}/{key}")
 
-            return {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_ns": checkpoint_ns,
-                    "checkpoint_id": checkpoint_id,
+                return {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": checkpoint_id,
+                    }
                 }
-            }
 
-        except ClientError as e:
-            raise RuntimeError(f"Failed to save checkpoint: {e}") from e
+            except ClientError as e:
+                raise RuntimeError(f"Failed to save checkpoint: {e}") from e
 
     async def aput_writes(
         self,
@@ -477,31 +509,32 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = str(config["configurable"]["checkpoint_id"])
 
-        try:
-            # Use asyncio.gather to upload writes concurrently
-            tasks = []
-            for idx, (channel, value) in enumerate(writes):
-                # Use WRITES_IDX_MAP for special channels, otherwise use sequential index
-                write_idx = WRITES_IDX_MAP.get(channel, idx)
+        async with self._get_s3_client() as s3_client:
+            try:
+                # Use asyncio.gather to upload writes concurrently
+                tasks = []
+                for idx, (channel, value) in enumerate(writes):
+                    # Use WRITES_IDX_MAP for special channels, otherwise use sequential index
+                    write_idx = WRITES_IDX_MAP.get(channel, idx)
 
-                write_data = serialize_write_data(channel, value, self.serde)
-                key = get_write_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id, task_id, write_idx)
+                    write_data = serialize_write_data(channel, value, self.serde)
+                    key = get_write_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id, task_id, write_idx)
 
-                task = self.s3_client.put_object(
-                    Bucket=self.bucket_name,
-                    Key=key,
-                    Body=write_data,
-                    ContentType="application/json",
-                )
-                tasks.append(task)
+                    task = s3_client.put_object(
+                        Bucket=self.bucket_name,
+                        Key=key,
+                        Body=write_data,
+                        ContentType="application/json",
+                    )
+                    tasks.append(task)
 
-            # Execute all uploads concurrently
-            await asyncio.gather(*tasks)
+                # Execute all uploads concurrently
+                await asyncio.gather(*tasks)
 
-            logger.debug(f"Stored {len(writes)} writes for checkpoint {checkpoint_id}")
+                logger.debug(f"Stored {len(writes)} writes for checkpoint {checkpoint_id}")
 
-        except ClientError as e:
-            raise RuntimeError(f"Failed to store writes: {e}") from e
+            except ClientError as e:
+                raise RuntimeError(f"Failed to store writes: {e}") from e
 
     async def adelete_thread(self, thread_id: str) -> None:
         """Delete all checkpoints and writes associated with a thread ID asynchronously.
@@ -517,34 +550,35 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
             f"{self.prefix}writes/{thread_id}/",
         ]
 
-        try:
-            for prefix in prefixes:
-                paginator = self.s3_client.get_paginator("list_objects_v2")
-                page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+        async with self._get_s3_client() as s3_client:
+            try:
+                for prefix in prefixes:
+                    paginator = s3_client.get_paginator("list_objects_v2")
+                    page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
 
-                objects_to_delete = []
-                async for page in page_iterator:
-                    if "Contents" not in page:
-                        continue
+                    objects_to_delete = []
+                    async for page in page_iterator:
+                        if "Contents" not in page:
+                            continue
 
-                    for obj in page["Contents"]:
-                        objects_to_delete.append({"Key": obj["Key"]})
+                        for obj in page["Contents"]:
+                            objects_to_delete.append({"Key": obj["Key"]})
 
-                        # Delete in batches of 1000 (S3 limit)
-                        if len(objects_to_delete) >= 1000:
-                            await self.s3_client.delete_objects(
-                                Bucket=self.bucket_name, Delete={"Objects": objects_to_delete}
-                            )
-                            objects_to_delete = []
+                            # Delete in batches of 1000 (S3 limit)
+                            if len(objects_to_delete) >= 1000:
+                                await s3_client.delete_objects(
+                                    Bucket=self.bucket_name, Delete={"Objects": objects_to_delete}
+                                )
+                                objects_to_delete = []
 
-                # Delete remaining objects
-                if objects_to_delete:
-                    await self.s3_client.delete_objects(Bucket=self.bucket_name, Delete={"Objects": objects_to_delete})
+                    # Delete remaining objects
+                    if objects_to_delete:
+                        await s3_client.delete_objects(Bucket=self.bucket_name, Delete={"Objects": objects_to_delete})
 
-            logger.info(f"Deleted all data for thread {thread_id}")
+                logger.info(f"Deleted all data for thread {thread_id}")
 
-        except ClientError as e:
-            raise RuntimeError(f"Failed to delete thread data: {e}") from e
+            except ClientError as e:
+                raise RuntimeError(f"Failed to delete thread data: {e}") from e
 
     def get_next_version(self, current: str | None, channel: None) -> str:
         """Generate the next version ID for a channel.

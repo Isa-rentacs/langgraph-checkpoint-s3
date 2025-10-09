@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 from botocore.exceptions import ClientError
 
 from langgraph_checkpoint_s3 import S3CheckpointSaver
@@ -159,7 +160,8 @@ class TestS3CheckpointSaver:
         checkpoints = list(self.saver.list(config))
         assert checkpoints == []
 
-    def test_get_next_version(self):
+    @pytest.mark.asyncio
+    async def test_get_next_version(self):
         """Test version generation."""
         # Test with None
         version = self.saver.get_next_version(None, None)
@@ -194,7 +196,8 @@ class TestS3CheckpointSaver:
 class TestAsyncS3CheckpointSaver:
     """Test cases for AsyncS3CheckpointSaver."""
 
-    def setup_method(self):
+    @pytest_asyncio.fixture(autouse=True)
+    async def setup_method(self):
         """Set up test fixtures."""
         self.mock_s3_client = AsyncMock()
         self.bucket_name = "test-bucket"
@@ -206,7 +209,8 @@ class TestAsyncS3CheckpointSaver:
             s3_client=self.mock_s3_client,
         )
 
-    def test_init_success(self):
+    @pytest.mark.asyncio
+    async def test_init_success(self):
         """Test successful initialization."""
         assert self.saver.bucket_name == self.bucket_name
         assert self.saver.prefix == "test-checkpoints/"
@@ -350,28 +354,23 @@ class TestAsyncS3CheckpointSaver:
     @pytest.mark.asyncio
     async def test_sync_methods_in_async_context(self):
         """Test that sync methods raise RuntimeError in async context."""
-        import warnings
-
         config = {"configurable": {"thread_id": "thread1"}}
 
-        # Test that sync methods raise RuntimeError when called in async context
-        # Suppress the expected warnings about unawaited coroutines
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
+        # Test that sync methods raise InvalidStateError when called in async context
+        with pytest.raises(asyncio.InvalidStateError):
+            self.saver.get_tuple(config)
 
-            with pytest.raises(RuntimeError):
-                self.saver.get_tuple(config)
+        with pytest.raises(asyncio.InvalidStateError):
+            self.saver.put(config, {}, {}, {})
 
-            with pytest.raises(RuntimeError):
-                self.saver.put(config, {}, {}, {})
+        with pytest.raises(asyncio.InvalidStateError):
+            self.saver.put_writes(config, [], "task1")
 
-            with pytest.raises(RuntimeError):
-                self.saver.put_writes(config, [], "task1")
+        with pytest.raises(asyncio.InvalidStateError):
+            self.saver.delete_thread("thread1")
 
-            with pytest.raises(RuntimeError):
-                self.saver.delete_thread("thread1")
-
-    def test_get_next_version(self):
+    @pytest.mark.asyncio
+    async def test_get_next_version(self):
         """Test version generation."""
         # Test with None
         version = self.saver.get_next_version(None, None)
