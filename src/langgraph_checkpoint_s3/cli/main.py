@@ -120,6 +120,7 @@ def list(ctx: click.Context, thread_id: str) -> None:
     }
     """
     try:
+        click.echo(f"Listing checkpoints for thread '{thread_id}'...", err=True)
         session = create_aioboto3_session(ctx.obj["profile"])
         reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         checkpoints = reader.list_checkpoints(thread_id)
@@ -165,6 +166,8 @@ def dump(ctx: click.Context, thread_id: str, checkpoint_ns: str, checkpoint_id: 
     }
     """
     try:
+        ns_display = f"'{checkpoint_ns}'" if checkpoint_ns else "default"
+        click.echo(f"Retrieving checkpoint '{checkpoint_id}' from namespace {ns_display} in thread '{thread_id}'...", err=True)
         session = create_aioboto3_session(ctx.obj["profile"])
         reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         checkpoint_data = reader.dump_checkpoint(thread_id, checkpoint_ns, checkpoint_id)

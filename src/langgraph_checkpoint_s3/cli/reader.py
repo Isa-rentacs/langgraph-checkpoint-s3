@@ -2,10 +2,11 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import aioboto3
 from botocore.exceptions import ClientError
+from langgraph.checkpoint.base import Checkpoint
 
 from ..aio import AsyncS3CheckpointSaver
 from ..utils import denormalize_checkpoint_ns
@@ -32,7 +33,56 @@ class S3CheckpointReader:
         self.prefix = prefix.rstrip("/") + "/" if prefix else ""
         self.session = session
         self._checkpointer = None  # Lazy initialization
+
+    @staticmethod
+    def _format_checkpoint_value(checkpoint: Checkpoint) -> Any:
+        """Format checkpoint values for better readability."""
+        if isinstance(checkpoint, dict):
+            formatted = {}
+            for key, value in checkpoint.items():
+                if key == 'channel_versions':
+                    formatted[key] = dict(value) if value else {}
+                elif key == 'versions_seen':
+                    formatted[key] = dict(value) if value else {}
+                elif key == 'channel_values':
+                    # Format channel values for readability
+                    if value:
+                        formatted_values = {}
+                        for channel, channel_value in value.items():
+                            formatted_values[channel] = S3CheckpointReader._format_channel_value(channel_value)
+                        formatted[key] = formatted_values
+                    else:
+                        formatted[key] = {}
+                else:
+                    formatted[key] = S3CheckpointReader._format_checkpoint_value(value)
+            return formatted
+        elif isinstance(checkpoint, list):
+            return [S3CheckpointReader._format_checkpoint_value(item) for item in checkpoint]
+        elif hasattr(checkpoint, '__dict__'):
+            # For objects, try to convert to dict
+            try:
+                return vars(checkpoint)
+            except:
+                return str(checkpoint)
+        else:
+            return checkpoint
     
+    @staticmethod
+    def _format_channel_value(channel_value: Any) -> Any:
+        """Format individual channel values for better readability."""
+        if isinstance(channel_value, dict):
+            return {k: S3CheckpointReader._format_channel_value(v) for k, v in channel_value.items()}
+        elif isinstance(channel_value, list):
+            return [S3CheckpointReader._format_channel_value(item) for item in channel_value]
+        elif hasattr(channel_value, '__dict__'):
+            # For objects, try to convert to dict
+            try:
+                return vars(channel_value)
+            except:
+                return str(channel_value)
+        else:
+            return channel_value
+
     @property
     def checkpointer(self) -> AsyncS3CheckpointSaver:
         """Get the checkpointer, creating it if needed."""
@@ -44,7 +94,7 @@ class S3CheckpointReader:
             )
         return self._checkpointer
 
-    async def _discover_namespaces_for_thread(self, thread_id: str) -> List[str]:
+    async def _discover_namespaces_for_thread(self, thread_id: str) -> list[str]:
         """Discover all namespaces that exist for a given thread.
         
         Args:
@@ -100,7 +150,7 @@ class S3CheckpointReader:
                 # Fallback to just the default namespace
                 return [""]
 
-    def list_checkpoints(self, thread_id: str) -> List[Dict[str, str]]:
+    def list_checkpoints(self, thread_id: str) -> list[dict[str, str]]:
         """List all (checkpoint_ns, checkpoint_id) pairs for a thread.
 
         Args:
@@ -111,7 +161,7 @@ class S3CheckpointReader:
         """
         return asyncio.run(self._async_list_checkpoints(thread_id))
 
-    async def _async_list_checkpoints(self, thread_id: str) -> List[Dict[str, str]]:
+    async def _async_list_checkpoints(self, thread_id: str) -> list[dict[str, str]]:
         """Async implementation of list_checkpoints."""
         thread_id = str(thread_id)
         
@@ -138,7 +188,7 @@ class S3CheckpointReader:
         except Exception as e:
             raise RuntimeError(f"Failed to list checkpoints for thread {thread_id}: {e}") from e
 
-    def dump_checkpoint(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> Dict[str, Any]:
+    def dump_checkpoint(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> dict[str, Any]:
         """Dump a specific checkpoint object.
 
         Args:
@@ -147,11 +197,11 @@ class S3CheckpointReader:
             checkpoint_id: The checkpoint ID
 
         Returns:
-            Dictionary containing the checkpoint data, metadata, and pending writes
+            dictionary containing the checkpoint data, metadata, and pending writes
         """
         return asyncio.run(self._async_dump_checkpoint(thread_id, checkpoint_ns, checkpoint_id))
 
-    async def _async_dump_checkpoint(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> Dict[str, Any]:
+    async def _async_dump_checkpoint(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> dict[str, Any]:
         """Async implementation of dump_checkpoint."""
         thread_id = str(thread_id)
         checkpoint_ns = checkpoint_ns or ""
@@ -174,7 +224,7 @@ class S3CheckpointReader:
                 "thread_id": thread_id,
                 "checkpoint_ns": checkpoint_ns,
                 "checkpoint_id": checkpoint_id,
-                "checkpoint": checkpoint_tuple.checkpoint,
+                "checkpoint": S3CheckpointReader._format_checkpoint_value(checkpoint_tuple.checkpoint),
                 "metadata": checkpoint_tuple.metadata,
                 "pending_writes": checkpoint_tuple.pending_writes,
             }
@@ -184,7 +234,7 @@ class S3CheckpointReader:
         except Exception as e:
             raise RuntimeError(f"Failed to get checkpoint: {e}") from e
 
-    def read_all_checkpoints(self, thread_id: str) -> List[Dict[str, Any]]:
+    def read_all_checkpoints(self, thread_id: str) -> list[dict[str, Any]]:
         """Read all checkpoints with their objects for a thread.
 
         Args:
@@ -195,7 +245,7 @@ class S3CheckpointReader:
         """
         return asyncio.run(self._async_read_all_checkpoints(thread_id))
 
-    async def _async_read_all_checkpoints(self, thread_id: str) -> List[Dict[str, Any]]:
+    async def _async_read_all_checkpoints(self, thread_id: str) -> list[dict[str, Any]]:
         """Async implementation of read_all_checkpoints with concurrent processing."""
         thread_id = str(thread_id)
         
@@ -215,7 +265,7 @@ class S3CheckpointReader:
                         "thread_id": thread_id,
                         "checkpoint_ns": checkpoint_ns,
                         "checkpoint_id": checkpoint_id,
-                        "checkpoint": checkpoint_tuple.checkpoint,
+                        "checkpoint": S3CheckpointReader._format_checkpoint_value(checkpoint_tuple.checkpoint),
                         "metadata": checkpoint_tuple.metadata,
                         "pending_writes": checkpoint_tuple.pending_writes,
                     }
