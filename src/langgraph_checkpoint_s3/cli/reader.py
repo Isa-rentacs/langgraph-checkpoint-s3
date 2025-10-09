@@ -5,8 +5,10 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import aioboto3
+from botocore.exceptions import ClientError
 
 from ..aio import AsyncS3CheckpointSaver
+from ..utils import denormalize_checkpoint_ns
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,62 @@ class S3CheckpointReader:
             )
         return self._checkpointer
 
+    async def _discover_namespaces_for_thread(self, thread_id: str) -> List[str]:
+        """Discover all namespaces that exist for a given thread.
+        
+        Args:
+            thread_id: The thread ID to discover namespaces for
+            
+        Returns:
+            List of namespace strings (including empty string for default namespace)
+        """
+        thread_id = str(thread_id)
+        prefix = f"{self.prefix}checkpoints/{thread_id}/"
+        namespaces = set()
+        
+        async with self.checkpointer._get_s3_client() as s3_client:
+            try:
+                # Use list_objects_v2 with delimiter to get "directories" (namespaces)
+                paginator = s3_client.get_paginator("list_objects_v2")
+                page_iterator = paginator.paginate(
+                    Bucket=self.bucket_name, 
+                    Prefix=prefix,
+                    Delimiter="/"
+                )
+                
+                async for page in page_iterator:
+                    # Check CommonPrefixes for namespace directories
+                    if "CommonPrefixes" in page:
+                        for common_prefix in page["CommonPrefixes"]:
+                            namespace_prefix = common_prefix["Prefix"]
+                            # Extract namespace from the prefix
+                            # Format: {self.prefix}checkpoints/{thread_id}/{namespace_safe}/
+                            namespace_safe = namespace_prefix[len(prefix):].rstrip("/")
+                            if namespace_safe:  # Skip empty namespace_safe (shouldn't happen with delimiter)
+                                namespace = denormalize_checkpoint_ns(namespace_safe)
+                                namespaces.add(namespace)
+                    
+                    # Also check for direct files (in case there are checkpoints in subdirectories)
+                    if "Contents" in page:
+                        for obj in page["Contents"]:
+                            key = obj["Key"]
+                            if key.endswith(".json"):
+                                # Parse the key to extract namespace
+                                # Format: {self.prefix}checkpoints/{thread_id}/{namespace_safe}/{checkpoint_id}.json
+                                relative_key = key[len(prefix):]
+                                parts = relative_key.split("/")
+                                if len(parts) >= 2:  # namespace_safe/checkpoint_id.json
+                                    namespace_safe = parts[0]
+                                    namespace = denormalize_checkpoint_ns(namespace_safe)
+                                    namespaces.add(namespace)
+                
+                return sorted(list(namespaces))
+                
+            except ClientError as e:
+                logger.warning(f"Failed to discover namespaces for thread {thread_id}: {e}")
+                # Fallback to just the default namespace
+                return [""]
+
     def list_checkpoints(self, thread_id: str) -> List[Dict[str, str]]:
         """List all (checkpoint_ns, checkpoint_id) pairs for a thread.
 
@@ -56,17 +114,22 @@ class S3CheckpointReader:
     async def _async_list_checkpoints(self, thread_id: str) -> List[Dict[str, str]]:
         """Async implementation of list_checkpoints."""
         thread_id = str(thread_id)
-        config = {"configurable": {"thread_id": thread_id}}
         
         checkpoints = []
         try:
-            async for checkpoint_tuple in self.checkpointer.alist(config):
-                checkpoint_ns = checkpoint_tuple.config["configurable"].get("checkpoint_ns", "")
-                checkpoint_id = checkpoint_tuple.config["configurable"]["checkpoint_id"]
-                checkpoints.append({
-                    "checkpoint_ns": checkpoint_ns,
-                    "checkpoint_id": checkpoint_id
-                })
+            # First, discover all namespaces for this thread by listing the directory structure
+            namespaces = await self._discover_namespaces_for_thread(thread_id)
+            
+            # For each namespace, list the checkpoints
+            for namespace in namespaces:
+                config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
+                async for checkpoint_tuple in self.checkpointer.alist(config):
+                    checkpoint_ns = checkpoint_tuple.config["configurable"].get("checkpoint_ns", "")
+                    checkpoint_id = checkpoint_tuple.config["configurable"]["checkpoint_id"]
+                    checkpoints.append({
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": checkpoint_id
+                    })
             
             # Sort by checkpoint_id for consistent output
             checkpoints.sort(key=lambda x: x["checkpoint_id"])
@@ -135,24 +198,31 @@ class S3CheckpointReader:
     async def _async_read_all_checkpoints(self, thread_id: str) -> List[Dict[str, Any]]:
         """Async implementation of read_all_checkpoints with concurrent processing."""
         thread_id = str(thread_id)
-        config = {"configurable": {"thread_id": thread_id}}
         
         all_checkpoints = []
         try:
-            async for checkpoint_tuple in self.checkpointer.alist(config):
-                checkpoint_ns = checkpoint_tuple.config["configurable"].get("checkpoint_ns", "")
-                checkpoint_id = checkpoint_tuple.config["configurable"]["checkpoint_id"]
-                
-                checkpoint_data = {
-                    "thread_id": thread_id,
-                    "checkpoint_ns": checkpoint_ns,
-                    "checkpoint_id": checkpoint_id,
-                    "checkpoint": checkpoint_tuple.checkpoint,
-                    "metadata": checkpoint_tuple.metadata,
-                    "pending_writes": checkpoint_tuple.pending_writes,
-                }
-                all_checkpoints.append(checkpoint_data)
+            # First, discover all namespaces for this thread
+            namespaces = await self._discover_namespaces_for_thread(thread_id)
+            
+            # For each namespace, read the checkpoints
+            for namespace in namespaces:
+                config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
+                async for checkpoint_tuple in self.checkpointer.alist(config):
+                    checkpoint_ns = checkpoint_tuple.config["configurable"].get("checkpoint_ns", "")
+                    checkpoint_id = checkpoint_tuple.config["configurable"]["checkpoint_id"]
+                    
+                    checkpoint_data = {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": checkpoint_ns,
+                        "checkpoint_id": checkpoint_id,
+                        "checkpoint": checkpoint_tuple.checkpoint,
+                        "metadata": checkpoint_tuple.metadata,
+                        "pending_writes": checkpoint_tuple.pending_writes,
+                    }
+                    all_checkpoints.append(checkpoint_data)
 
+            # Sort by checkpoint_id for consistent output
+            all_checkpoints.sort(key=lambda x: x["checkpoint_id"])
             return all_checkpoints
 
         except Exception as e:
