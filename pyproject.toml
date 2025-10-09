@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},
+    {name = "Jun Kuroda", email = "jkuroda.isa@gmail.com"},
 ]
 keywords = ["langgraph", "checkpoint", "s3", "storage"]
 classifiers = [
@@ -47,10 +47,10 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/langgraph-checkpoint-s3"
-Repository = "https://github.com/yourusername/langgraph-checkpoint-s3"
+Homepage = "https://github.com/Isa-rentacs/langgraph-checkpoint-s3"
+Repository = "https://github.com/Isa-rentacs/langgraph-checkpoint-s3"
 Documentation = "https://langgraph-checkpoint-s3.readthedocs.io"
-Issues = "https://github.com/yourusername/langgraph-checkpoint-s3/issues"
+Issues = "https://github.com/Isa-rentacs/langgraph-checkpoint-s3/issues"
 
 [project.scripts]
 s3-checkpoint = "langgraph_checkpoint_s3.cli.main:cli"

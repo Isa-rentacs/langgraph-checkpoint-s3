@@ -382,7 +382,7 @@ This project uses modern Python packaging with `hatchling` as the build backend.
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/langgraph-checkpoint-s3.git
+   git clone https://github.com/Isa-rentacs/langgraph-checkpoint-s3.git
    cd langgraph-checkpoint-s3
    ```
 
