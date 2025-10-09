@@ -1,9 +1,11 @@
 """Main CLI entry point for S3 checkpoint reader."""
 
+import asyncio
 import json
 import sys
 from typing import Any, Dict, Optional
 
+import aioboto3
 import boto3
 import click
 
@@ -41,23 +43,22 @@ def handle_error(error: Exception, exit_code: int) -> None:
     sys.exit(exit_code)
 
 
-def create_s3_client(profile: Optional[str] = None) -> Any:
-    """Create an S3 client with optional AWS profile.
+def create_aioboto3_session(profile: Optional[str] = None) -> aioboto3.Session:
+    """Create an aioboto3 session with optional AWS profile.
     
     Args:
         profile: Optional AWS profile name to use
         
     Returns:
-        boto3 S3 client
+        aioboto3 Session
     """
     try:
         if profile:
-            session = boto3.Session(profile_name=profile)
-            return session.client("s3")
+            return aioboto3.Session(profile_name=profile)
         else:
-            return boto3.client("s3")
+            return aioboto3.Session()
     except Exception as e:
-        raise RuntimeError(f"Failed to create S3 client with profile '{profile}': {e}") from e
+        raise RuntimeError(f"Failed to create aioboto3 session with profile '{profile}': {e}") from e
 
 
 @click.group()
@@ -119,8 +120,8 @@ def list(ctx: click.Context, thread_id: str) -> None:
     }
     """
     try:
-        s3_client = create_s3_client(ctx.obj["profile"])
-        reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], s3_client)
+        session = create_aioboto3_session(ctx.obj["profile"])
+        reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         checkpoints = reader.list_checkpoints(thread_id)
         
         output_data = {
@@ -130,7 +131,7 @@ def list(ctx: click.Context, thread_id: str) -> None:
         output_json(output_data)
         
     except RuntimeError as e:
-        if "Failed to create S3 client" in str(e):
+        if "Failed to create aioboto3 session" in str(e):
             handle_error(e, 2)  # AWS credentials error
         elif "Failed to list checkpoints" in str(e):
             handle_error(e, 3)  # S3 access error
@@ -164,13 +165,13 @@ def dump(ctx: click.Context, thread_id: str, checkpoint_ns: str, checkpoint_id: 
     }
     """
     try:
-        s3_client = create_s3_client(ctx.obj["profile"])
-        reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], s3_client)
+        session = create_aioboto3_session(ctx.obj["profile"])
+        reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         checkpoint_data = reader.dump_checkpoint(thread_id, checkpoint_ns, checkpoint_id)
         output_json(checkpoint_data)
         
     except RuntimeError as e:
-        if "Failed to create S3 client" in str(e):
+        if "Failed to create aioboto3 session" in str(e):
             handle_error(e, 2)  # AWS credentials error
         elif "Checkpoint not found" in str(e):
             handle_error(e, 4)  # Checkpoint not found
@@ -208,8 +209,8 @@ def read(ctx: click.Context, thread_id: str) -> None:
     }
     """
     try:
-        s3_client = create_s3_client(ctx.obj["profile"])
-        reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], s3_client)
+        session = create_aioboto3_session(ctx.obj["profile"])
+        reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         all_checkpoints = reader.read_all_checkpoints(thread_id)
         
         output_data = {
@@ -219,7 +220,7 @@ def read(ctx: click.Context, thread_id: str) -> None:
         output_json(output_data)
         
     except RuntimeError as e:
-        if "Failed to create S3 client" in str(e):
+        if "Failed to create aioboto3 session" in str(e):
             handle_error(e, 2)  # AWS credentials error
         elif "Failed to list checkpoints" in str(e):
             handle_error(e, 3)  # S3 access error
@@ -230,4 +231,5 @@ def read(ctx: click.Context, thread_id: str) -> None:
 
 
 if __name__ == "__main__":
-    cli()
+    # Run the CLI with an event loop so AsyncS3CheckpointSaver can work
+    asyncio.run(cli())
