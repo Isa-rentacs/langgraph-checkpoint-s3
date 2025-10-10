@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -58,7 +58,7 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
         bucket_name: str,
         *,
         prefix: str = "checkpoints/",
-        s3_client: Optional[Any] = None,
+        s3_client: Any | None = None,
         **kwargs,
     ) -> None:
         """Initialize the S3 checkpoint saver."""

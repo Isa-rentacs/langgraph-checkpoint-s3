@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import aioboto3
 from botocore.exceptions import ClientError
@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 class S3CheckpointReader:
     """Reader for S3-stored checkpoints that outputs JSON to stdout.
-    
+
     This class uses AsyncS3CheckpointSaver internally for data access,
     providing only the presentation layer for CLI operations.
     """
 
-    def __init__(self, bucket_name: str, prefix: str, session: Optional[aioboto3.Session] = None) -> None:
+    def __init__(self, bucket_name: str, prefix: str, session: aioboto3.Session | None = None) -> None:
         """Initialize the S3 checkpoint reader.
 
         Args:
@@ -40,11 +40,11 @@ class S3CheckpointReader:
         if isinstance(checkpoint, dict):
             formatted = {}
             for key, value in checkpoint.items():
-                if key == 'channel_versions':
+                if key == "channel_versions":
                     formatted[key] = dict(value) if value else {}
-                elif key == 'versions_seen':
+                elif key == "versions_seen":
                     formatted[key] = dict(value) if value else {}
-                elif key == 'channel_values':
+                elif key == "channel_values":
                     # Format channel values for readability
                     if value:
                         formatted_values = {}
@@ -58,15 +58,15 @@ class S3CheckpointReader:
             return formatted
         elif isinstance(checkpoint, list):
             return [S3CheckpointReader._format_checkpoint_value(item) for item in checkpoint]
-        elif hasattr(checkpoint, '__dict__'):
+        elif hasattr(checkpoint, "__dict__"):
             # For objects, try to convert to dict
             try:
                 return vars(checkpoint)
-            except:
+            except Exception:
                 return str(checkpoint)
         else:
             return checkpoint
-    
+
     @staticmethod
     def _format_channel_value(channel_value: Any) -> Any:
         """Format individual channel values for better readability."""
@@ -74,11 +74,11 @@ class S3CheckpointReader:
             return {k: S3CheckpointReader._format_channel_value(v) for k, v in channel_value.items()}
         elif isinstance(channel_value, list):
             return [S3CheckpointReader._format_channel_value(item) for item in channel_value]
-        elif hasattr(channel_value, '__dict__'):
+        elif hasattr(channel_value, "__dict__"):
             # For objects, try to convert to dict
             try:
                 return vars(channel_value)
-            except:
+            except Exception:
                 return str(channel_value)
         else:
             return channel_value
@@ -88,35 +88,29 @@ class S3CheckpointReader:
         """Get the checkpointer, creating it if needed."""
         if self._checkpointer is None:
             self._checkpointer = AsyncS3CheckpointSaver(
-                bucket_name=self.bucket_name,
-                prefix=self.prefix,
-                session=self.session
+                bucket_name=self.bucket_name, prefix=self.prefix, session=self.session
             )
         return self._checkpointer
 
     async def _discover_namespaces_for_thread(self, thread_id: str) -> list[str]:
         """Discover all namespaces that exist for a given thread.
-        
+
         Args:
             thread_id: The thread ID to discover namespaces for
-            
+
         Returns:
             List of namespace strings (including empty string for default namespace)
         """
         thread_id = str(thread_id)
         prefix = f"{self.prefix}checkpoints/{thread_id}/"
         namespaces = set()
-        
+
         async with self.checkpointer._get_s3_client() as s3_client:
             try:
                 # Use list_objects_v2 with delimiter to get "directories" (namespaces)
                 paginator = s3_client.get_paginator("list_objects_v2")
-                page_iterator = paginator.paginate(
-                    Bucket=self.bucket_name, 
-                    Prefix=prefix,
-                    Delimiter="/"
-                )
-                
+                page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix, Delimiter="/")
+
                 async for page in page_iterator:
                     # Check CommonPrefixes for namespace directories
                     if "CommonPrefixes" in page:
@@ -124,11 +118,11 @@ class S3CheckpointReader:
                             namespace_prefix = common_prefix["Prefix"]
                             # Extract namespace from the prefix
                             # Format: {self.prefix}checkpoints/{thread_id}/{namespace_safe}/
-                            namespace_safe = namespace_prefix[len(prefix):].rstrip("/")
+                            namespace_safe = namespace_prefix[len(prefix) :].rstrip("/")
                             if namespace_safe:  # Skip empty namespace_safe (shouldn't happen with delimiter)
                                 namespace = denormalize_checkpoint_ns(namespace_safe)
                                 namespaces.add(namespace)
-                    
+
                     # Also check for direct files (in case there are checkpoints in subdirectories)
                     if "Contents" in page:
                         for obj in page["Contents"]:
@@ -136,15 +130,15 @@ class S3CheckpointReader:
                             if key.endswith(".json"):
                                 # Parse the key to extract namespace
                                 # Format: {self.prefix}checkpoints/{thread_id}/{namespace_safe}/{checkpoint_id}.json
-                                relative_key = key[len(prefix):]
+                                relative_key = key[len(prefix) :]
                                 parts = relative_key.split("/")
                                 if len(parts) >= 2:  # namespace_safe/checkpoint_id.json
                                     namespace_safe = parts[0]
                                     namespace = denormalize_checkpoint_ns(namespace_safe)
                                     namespaces.add(namespace)
-                
-                return sorted(list(namespaces))
-                
+
+                return sorted(namespaces)
+
             except ClientError as e:
                 logger.warning(f"Failed to discover namespaces for thread {thread_id}: {e}")
                 # Fallback to just the default namespace
@@ -164,23 +158,20 @@ class S3CheckpointReader:
     async def _async_list_checkpoints(self, thread_id: str) -> list[dict[str, str]]:
         """Async implementation of list_checkpoints."""
         thread_id = str(thread_id)
-        
+
         checkpoints = []
         try:
             # First, discover all namespaces for this thread by listing the directory structure
             namespaces = await self._discover_namespaces_for_thread(thread_id)
-            
+
             # For each namespace, list the checkpoints
             for namespace in namespaces:
                 config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
                 async for checkpoint_tuple in self.checkpointer.alist(config):
                     checkpoint_ns = checkpoint_tuple.config["configurable"].get("checkpoint_ns", "")
                     checkpoint_id = checkpoint_tuple.config["configurable"]["checkpoint_id"]
-                    checkpoints.append({
-                        "checkpoint_ns": checkpoint_ns,
-                        "checkpoint_id": checkpoint_id
-                    })
-            
+                    checkpoints.append({"checkpoint_ns": checkpoint_ns, "checkpoint_id": checkpoint_id})
+
             # Sort by checkpoint_id for consistent output
             checkpoints.sort(key=lambda x: x["checkpoint_id"])
             return checkpoints
@@ -248,19 +239,19 @@ class S3CheckpointReader:
     async def _async_read_all_checkpoints(self, thread_id: str) -> list[dict[str, Any]]:
         """Async implementation of read_all_checkpoints with concurrent processing."""
         thread_id = str(thread_id)
-        
+
         all_checkpoints = []
         try:
             # First, discover all namespaces for this thread
             namespaces = await self._discover_namespaces_for_thread(thread_id)
-            
+
             # For each namespace, read the checkpoints
             for namespace in namespaces:
                 config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
                 async for checkpoint_tuple in self.checkpointer.alist(config):
                     checkpoint_ns = checkpoint_tuple.config["configurable"].get("checkpoint_ns", "")
                     checkpoint_id = checkpoint_tuple.config["configurable"]["checkpoint_id"]
-                    
+
                     checkpoint_data = {
                         "thread_id": thread_id,
                         "checkpoint_ns": checkpoint_ns,
@@ -279,7 +270,7 @@ class S3CheckpointReader:
             raise RuntimeError(f"Failed to read checkpoints for thread {thread_id}: {e}") from e
 
 
-def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
+def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     """Parse an S3 URI into bucket name and prefix.
 
     Args:

@@ -201,15 +201,15 @@ class TestAsyncS3CheckpointSaver:
         """Set up test fixtures."""
         self.mock_s3_client = AsyncMock()
         self.mock_session = MagicMock()  # Use MagicMock instead of AsyncMock
-        
+
         # Create a proper async context manager mock
         mock_client_context = AsyncMock()
         mock_client_context.__aenter__ = AsyncMock(return_value=self.mock_s3_client)
         mock_client_context.__aexit__ = AsyncMock(return_value=None)
-        
+
         # Mock the session's client method to return the context manager directly (not a coroutine)
         self.mock_session.client = MagicMock(return_value=mock_client_context)
-        
+
         self.bucket_name = "test-bucket"
         self.prefix = "test-checkpoints/"
 

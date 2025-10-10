@@ -156,7 +156,9 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         except RuntimeError:
             pass
 
-        return asyncio.run_coroutine_threadsafe(self.aput(config, checkpoint, metadata, new_versions), self.loop).result()
+        return asyncio.run_coroutine_threadsafe(
+            self.aput(config, checkpoint, metadata, new_versions), self.loop
+        ).result()
 
     def put_writes(
         self,

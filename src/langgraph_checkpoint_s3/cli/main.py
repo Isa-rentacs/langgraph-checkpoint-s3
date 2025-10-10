@@ -3,10 +3,9 @@
 import asyncio
 import json
 import sys
-from typing import Any, Dict, Optional
+from typing import Any
 
 import aioboto3
-import boto3
 import click
 
 from .reader import S3CheckpointReader, parse_s3_uri
@@ -27,7 +26,7 @@ class JSONEncoder(json.JSONEncoder):
             return str(obj)
 
 
-def output_json(data: Dict[str, Any]) -> None:
+def output_json(data: dict[str, Any]) -> None:
     """Output data as JSON to stdout."""
     try:
         json.dump(data, sys.stdout, cls=JSONEncoder, indent=2, ensure_ascii=False)
@@ -43,12 +42,12 @@ def handle_error(error: Exception, exit_code: int) -> None:
     sys.exit(exit_code)
 
 
-def create_aioboto3_session(profile: Optional[str] = None) -> aioboto3.Session:
+def create_aioboto3_session(profile: str | None = None) -> aioboto3.Session:
     """Create an aioboto3 session with optional AWS profile.
-    
+
     Args:
         profile: Optional AWS profile name to use
-        
+
     Returns:
         aioboto3 Session
     """
@@ -72,23 +71,23 @@ def create_aioboto3_session(profile: Optional[str] = None) -> aioboto3.Session:
     help="AWS profile to use for authentication (optional, defaults to default profile or environment credentials)",
 )
 @click.pass_context
-def cli(ctx: click.Context, s3_prefix: str, profile: Optional[str]) -> None:
+def cli(ctx: click.Context, s3_prefix: str, profile: str | None) -> None:
     """S3 Checkpoint Reader - Read LangGraph checkpoints from S3.
-    
+
     This tool helps you read and inspect LangGraph checkpoints stored in Amazon S3.
     All output is in JSON format and sent to stdout.
-    
+
     AWS Authentication:
         The tool uses standard AWS credential chain. You can specify a profile with --profile,
         or it will use environment variables, default profile, or IAM roles.
-    
+
     Examples:
         s3-checkpoint list --s3-prefix s3://my-bucket/checkpoints/ --thread-id abc123
         s3-checkpoint dump --s3-prefix s3://my-bucket/checkpoints/ --thread-id abc123 --checkpoint-ns "" --checkpoint-id xyz789
         s3-checkpoint read --s3-prefix s3://my-bucket/checkpoints/ --thread-id abc123 --profile my-aws-profile
     """
     ctx.ensure_object(dict)
-    
+
     # Parse S3 URI
     try:
         bucket_name, prefix = parse_s3_uri(s3_prefix)
@@ -104,12 +103,12 @@ def cli(ctx: click.Context, s3_prefix: str, profile: Optional[str]) -> None:
 @click.pass_context
 def list(ctx: click.Context, thread_id: str) -> None:
     """List all (checkpoint_ns, checkpoint_id) pairs for a thread.
-    
+
     This command lists all available checkpoints for the specified thread ID,
     showing the checkpoint namespace and checkpoint ID for each one.
-    
+
     Output format:
-    
+
     \b
     {
       "thread_id": "thread123",
@@ -124,13 +123,10 @@ def list(ctx: click.Context, thread_id: str) -> None:
         session = create_aioboto3_session(ctx.obj["profile"])
         reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         checkpoints = reader.list_checkpoints(thread_id)
-        
-        output_data = {
-            "thread_id": thread_id,
-            "checkpoints": checkpoints
-        }
+
+        output_data = {"thread_id": thread_id, "checkpoints": checkpoints}
         output_json(output_data)
-        
+
     except RuntimeError as e:
         if "Failed to create aioboto3 session" in str(e):
             handle_error(e, 2)  # AWS credentials error
@@ -149,12 +145,12 @@ def list(ctx: click.Context, thread_id: str) -> None:
 @click.pass_context
 def dump(ctx: click.Context, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> None:
     """Dump a specific checkpoint object.
-    
+
     This command retrieves and displays the full checkpoint data, metadata,
     and pending writes for a specific checkpoint.
-    
+
     Output format:
-    
+
     \b
     {
       "thread_id": "thread123",
@@ -167,12 +163,14 @@ def dump(ctx: click.Context, thread_id: str, checkpoint_ns: str, checkpoint_id: 
     """
     try:
         ns_display = f"'{checkpoint_ns}'" if checkpoint_ns else "default"
-        click.echo(f"Retrieving checkpoint '{checkpoint_id}' from namespace {ns_display} in thread '{thread_id}'...", err=True)
+        click.echo(
+            f"Retrieving checkpoint '{checkpoint_id}' from namespace {ns_display} in thread '{thread_id}'...", err=True
+        )
         session = create_aioboto3_session(ctx.obj["profile"])
         reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         checkpoint_data = reader.dump_checkpoint(thread_id, checkpoint_ns, checkpoint_id)
         output_json(checkpoint_data)
-        
+
     except RuntimeError as e:
         if "Failed to create aioboto3 session" in str(e):
             handle_error(e, 2)  # AWS credentials error
@@ -191,12 +189,12 @@ def dump(ctx: click.Context, thread_id: str, checkpoint_ns: str, checkpoint_id: 
 @click.pass_context
 def read(ctx: click.Context, thread_id: str) -> None:
     """Read all checkpoints with their objects for a thread.
-    
+
     This command retrieves and displays all checkpoints for the specified thread,
     including their full checkpoint data, metadata, and pending writes.
-    
+
     Output format:
-    
+
     \b
     {
       "thread_id": "thread123",
@@ -215,13 +213,10 @@ def read(ctx: click.Context, thread_id: str) -> None:
         session = create_aioboto3_session(ctx.obj["profile"])
         reader = S3CheckpointReader(ctx.obj["bucket_name"], ctx.obj["prefix"], session)
         all_checkpoints = reader.read_all_checkpoints(thread_id)
-        
-        output_data = {
-            "thread_id": thread_id,
-            "checkpoints": all_checkpoints
-        }
+
+        output_data = {"thread_id": thread_id, "checkpoints": all_checkpoints}
         output_json(output_data)
-        
+
     except RuntimeError as e:
         if "Failed to create aioboto3 session" in str(e):
             handle_error(e, 2)  # AWS credentials error
