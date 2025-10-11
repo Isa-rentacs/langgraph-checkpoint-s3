@@ -170,10 +170,45 @@ format = [
 dependencies = [
     "mypy>=1.0.0",
     "boto3-stubs[s3]>=1.26.0",
+    "types-aioboto3[s3]>=12.0.0",
 ]
 
 [tool.hatch.envs.type-check.scripts]
 check = "mypy src"
+
+[tool.hatch.envs.ci]
+dependencies = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "boto3-stubs[s3]>=1.26.0",
+    "types-aioboto3[s3]>=12.0.0",
+    "twine",
+]
+
+[tool.hatch.envs.ci.scripts]
+check-all = [
+    "echo '=== Running CI Pipeline ==='",
+    "echo 'Step 1: Linting checks...'",
+    "hatch run lint:check",
+    "echo 'Step 2: Type checking...'", 
+    "hatch run type-check:check",
+    "echo 'Step 3: Running tests with coverage...'",
+    "hatch run test-cov",
+    "echo 'Step 4: Building package...'",
+    "hatch build",
+    "echo 'Step 5: Checking built package...'",
+    "twine check dist/*",
+    "echo '=== CI Pipeline Completed Successfully ==='",
+]
+# Individual steps for debugging (reference existing environments)
+lint = "hatch run lint:check"
+type-check = "hatch run type-check:check"
+test = "hatch run test-cov"
+build = "hatch build"
+check-dist = "twine check dist/*"
 
 [tool.hatch.envs.docs]
 dependencies = [

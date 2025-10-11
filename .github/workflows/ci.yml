@@ -28,17 +28,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install hatch
 
-    - name: Run linting checks
+    - name: Run CI checks
       run: |
-        hatch run lint:check
-
-    - name: Run type checking
-      run: |
-        hatch run type-check:check
-
-    - name: Run tests with coverage
-      run: |
-        hatch run test-cov
+        hatch run ci:check-all
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
