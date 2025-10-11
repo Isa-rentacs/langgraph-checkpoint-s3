@@ -7,7 +7,6 @@ from langgraph_checkpoint_s3.utils import (
     deserialize_checkpoint_data,
     deserialize_write_data,
     get_checkpoint_key,
-    get_next_version,
     get_write_key,
     get_writes_prefix,
     normalize_checkpoint_ns,
@@ -98,21 +97,3 @@ class TestUtilityFunctions:
         assert isinstance(serialized, str)
         assert deserialized_channel == channel
         assert deserialized_value == {"deserialized": "data"}
-
-    def test_get_next_version(self):
-        """Test version generation."""
-        # Test with None
-        version = get_next_version(None, None)
-        assert version.startswith("1.")
-
-        # Test with string version
-        version = get_next_version("5.123456", None)
-        assert version.startswith("6.")
-
-        # Test with int version
-        version = get_next_version(10, None)
-        assert version.startswith("11.")
-
-        # Test with float version
-        version = get_next_version(3.5, None)
-        assert version.startswith("4.")

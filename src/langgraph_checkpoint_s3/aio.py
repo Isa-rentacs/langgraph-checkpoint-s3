@@ -30,7 +30,6 @@ from .utils import (
     deserialize_checkpoint_data,
     deserialize_write_data,
     get_checkpoint_key,
-    get_next_version,
     get_write_key,
     get_writes_prefix,
     normalize_checkpoint_ns,
@@ -581,17 +580,3 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
 
             except ClientError as e:
                 raise RuntimeError(f"Failed to delete thread data: {e}") from e
-
-    def get_next_version(self, current: str | None, channel: None) -> str:
-        """Generate the next version ID for a channel.
-
-        This method creates a new version identifier for a channel based on its current version.
-
-        Args:
-            current: The current version identifier of the channel.
-            channel: Deprecated argument, kept for backwards compatibility.
-
-        Returns:
-            str: The next version identifier, which is guaranteed to be monotonically increasing.
-        """
-        return get_next_version(current, channel)

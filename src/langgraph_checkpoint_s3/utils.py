@@ -2,13 +2,13 @@
 
 import base64
 import json
-import random
 from typing import Any, cast
 
 from langgraph.checkpoint.base import (
     Checkpoint,
     CheckpointMetadata,
 )
+from langgraph.checkpoint.serde.base import SerializerProtocol
 
 
 def normalize_checkpoint_ns(checkpoint_ns: str) -> str:
@@ -90,28 +90,3 @@ def deserialize_write_data(data: str, serde) -> tuple[str, Any]:
     value_bytes = base64.b64decode(parsed["value"])
     value = serde.loads_typed((parsed["value_type"], value_bytes))
     return channel, value
-
-
-def get_next_version(current: str | None, channel: None) -> str:
-    """Generate the next version ID for a channel.
-
-    This method creates a new version identifier for a channel based on its current version.
-
-    Args:
-        current: The current version identifier of the channel.
-        channel: Deprecated argument, kept for backwards compatibility.
-
-    Returns:
-        str: The next version identifier, which is guaranteed to be monotonically increasing.
-    """
-    if current is None:
-        current_v = 0
-    elif isinstance(current, int):
-        current_v = current
-    elif isinstance(current, float):
-        current_v = int(current)
-    else:
-        current_v = int(current.split(".")[0])
-    next_v = current_v + 1
-    next_h = random.random()
-    return f"{next_v}.{next_h:.10f}"

@@ -160,21 +160,6 @@ class TestS3CheckpointSaver:
         checkpoints = list(self.saver.list(config))
         assert checkpoints == []
 
-    @pytest.mark.asyncio
-    async def test_get_next_version(self):
-        """Test version generation."""
-        # Test with None
-        version = self.saver.get_next_version(None, None)
-        assert version.startswith("1.")
-
-        # Test with string version
-        version = self.saver.get_next_version("5.123456", None)
-        assert version.startswith("6.")
-
-        # Test with int version
-        version = self.saver.get_next_version(10, None)
-        assert version.startswith("11.")
-
     def test_async_methods_not_implemented(self):
         """Test that async methods raise NotImplementedError."""
         config = {"configurable": {"thread_id": "thread1"}}
@@ -378,18 +363,3 @@ class TestAsyncS3CheckpointSaver:
 
         with pytest.raises(asyncio.InvalidStateError):
             self.saver.delete_thread("thread1")
-
-    @pytest.mark.asyncio
-    async def test_get_next_version(self):
-        """Test version generation."""
-        # Test with None
-        version = self.saver.get_next_version(None, None)
-        assert version.startswith("1.")
-
-        # Test with string version
-        version = self.saver.get_next_version("5.123456", None)
-        assert version.startswith("6.")
-
-        # Test with int version
-        version = self.saver.get_next_version(10, None)
-        assert version.startswith("11.")
