@@ -1,11 +1,20 @@
 """S3 checkpoint storage implementation for LangGraph."""
 
+from __future__ import annotations
+
 import logging
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from botocore.exceptions import ClientError
+from botocore.paginate import PageIterator
+
+if TYPE_CHECKING:
+    from types_boto3_s3 import S3Client
+    from types_boto3_s3.paginator import ListObjectsV2Paginator
+    from types_boto3_s3.type_defs import ListObjectsV2OutputTypeDef, ObjectTypeDef
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
@@ -57,8 +66,8 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
         bucket_name: str,
         *,
         prefix: str = "checkpoints/",
-        s3_client: Any | None = None,
-        **kwargs,
+        s3_client: S3Client | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize the S3 checkpoint saver."""
         super().__init__(**kwargs)
@@ -108,13 +117,13 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
                 parent_config = None
                 if "parents" in metadata and checkpoint_ns in metadata["parents"]:
                     parent_checkpoint_id = metadata["parents"][checkpoint_ns]
-                    parent_config = {
-                        "configurable": {
+                    parent_config = RunnableConfig(
+                        configurable={
                             "thread_id": thread_id,
                             "checkpoint_ns": checkpoint_ns,
                             "checkpoint_id": parent_checkpoint_id,
                         }
-                    }
+                    )
 
                 return CheckpointTuple(
                     config=config,
@@ -135,10 +144,12 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
 
             try:
                 # Use paginator to go over all objects under the prefix
-                paginator = self.s3_client.get_paginator("list_objects_v2")
-                page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+                paginator: ListObjectsV2Paginator = self.s3_client.get_paginator("list_objects_v2")  # type: ignore[assignment]
+                page_iterator: PageIterator[ListObjectsV2OutputTypeDef] = paginator.paginate(
+                    Bucket=self.bucket_name, Prefix=prefix
+                )
 
-                objects = []
+                objects: list[ObjectTypeDef] = []
                 for page in page_iterator:
                     if "Contents" in page:
                         objects.extend(page["Contents"])
@@ -154,13 +165,13 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
                 latest_checkpoint_id = latest_key.split("/")[-1].replace(".json", "")
 
                 # Recursively call with specific checkpoint_id
-                config_with_id = {
-                    "configurable": {
+                config_with_id = RunnableConfig(
+                    configurable={
                         "thread_id": thread_id,
                         "checkpoint_ns": checkpoint_ns,
                         "checkpoint_id": latest_checkpoint_id,
                     }
-                }
+                )
                 return self.get_tuple(config_with_id)
 
             except ClientError as e:
@@ -281,13 +292,13 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
 
             # Yield checkpoint tuples
             for thread_id, checkpoint_ns, checkpoint_id, _ in checkpoints:
-                checkpoint_config = {
-                    "configurable": {
+                checkpoint_config = RunnableConfig(
+                    configurable={
                         "thread_id": thread_id,
                         "checkpoint_ns": checkpoint_ns,
                         "checkpoint_id": checkpoint_id,
                     }
-                }
+                )
 
                 checkpoint_tuple = self.get_tuple(checkpoint_config)
                 if checkpoint_tuple:
@@ -427,13 +438,14 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
                         # Delete in batches of 1000 (S3 limit)
                         if len(objects_to_delete) >= 1000:
                             self.s3_client.delete_objects(
-                                Bucket=self.bucket_name, Delete={"Objects": objects_to_delete}
+                                Bucket=self.bucket_name,
+                                Delete={"Objects": objects_to_delete},  # type: ignore[typeddict-item]
                             )
                             objects_to_delete = []
 
                 # Delete remaining objects
                 if objects_to_delete:
-                    self.s3_client.delete_objects(Bucket=self.bucket_name, Delete={"Objects": objects_to_delete})
+                    self.s3_client.delete_objects(Bucket=self.bucket_name, Delete={"Objects": objects_to_delete})  # type: ignore[typeddict-item]
 
             logger.info(f"Deleted all data for thread {thread_id}")
 
@@ -459,7 +471,8 @@ class S3CheckpointSaver(BaseCheckpointSaver[str]):
         raise NotImplementedError(
             "Async methods are not supported in S3CheckpointSaver. Use AsyncS3CheckpointSaver instead."
         )
-        yield  # Make this a generator
+        # Make this a generator
+        yield  # type: ignore[unreachable]
 
     async def aput(
         self,

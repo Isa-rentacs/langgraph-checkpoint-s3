@@ -39,7 +39,7 @@ def get_write_key(prefix: str, thread_id: str, checkpoint_ns: str, checkpoint_id
     return f"{writes_prefix}{task_id}_{idx}.json"
 
 
-def serialize_checkpoint_data(checkpoint: Checkpoint, metadata: CheckpointMetadata, serde) -> str:
+def serialize_checkpoint_data(checkpoint: Checkpoint, metadata: CheckpointMetadata, serde: SerializerProtocol) -> str:
     """Serialize checkpoint and metadata for storage."""
     type_, serialized_checkpoint = serde.dumps_typed(checkpoint)
     # Convert bytes to base64 string for JSON serialization
@@ -56,7 +56,7 @@ def serialize_checkpoint_data(checkpoint: Checkpoint, metadata: CheckpointMetada
     return json.dumps(data, indent=2)
 
 
-def deserialize_checkpoint_data(data: str, serde) -> tuple[Checkpoint, CheckpointMetadata]:
+def deserialize_checkpoint_data(data: str, serde: SerializerProtocol) -> tuple[Checkpoint, CheckpointMetadata]:
     """Deserialize checkpoint and metadata from storage."""
     parsed = json.loads(data)
     # Convert base64 string back to bytes
@@ -68,7 +68,7 @@ def deserialize_checkpoint_data(data: str, serde) -> tuple[Checkpoint, Checkpoin
     return checkpoint, metadata
 
 
-def serialize_write_data(channel: str, value: Any, serde) -> str:
+def serialize_write_data(channel: str, value: Any, serde: SerializerProtocol) -> str:
     """Serialize write data for storage."""
     type_, serialized_value = serde.dumps_typed(value)
     # Convert bytes to base64 string for JSON serialization
@@ -82,7 +82,7 @@ def serialize_write_data(channel: str, value: Any, serde) -> str:
     return json.dumps(data, indent=2)
 
 
-def deserialize_write_data(data: str, serde) -> tuple[str, Any]:
+def deserialize_write_data(data: str, serde: SerializerProtocol) -> tuple[str, Any]:
     """Deserialize write data from storage."""
     parsed = json.loads(data)
     channel = parsed["channel"]

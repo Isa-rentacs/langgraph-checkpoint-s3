@@ -40,6 +40,7 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=2.20.0",
     "types-aioboto3[s3]>=12.0.0",
+    "types-boto3-s3 >= 1.40.0"
 ]
 docs = [
     "sphinx>=5.0.0",
@@ -101,6 +102,9 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
 strict_equality = true
+exclude = [
+    "src/langgraph_checkpoint_s3/cli/.*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -171,6 +175,7 @@ dependencies = [
     "mypy>=1.0.0",
     "boto3-stubs[s3]>=1.26.0",
     "types-aioboto3[s3]>=12.0.0",
+    "types-boto3-s3>=1.40.0"
 ]
 
 [tool.hatch.envs.type-check.scripts]
@@ -196,7 +201,7 @@ check-all = [
     "echo 'Step 2: Type checking...'", 
     "hatch run type-check:check",
     "echo 'Step 3: Running tests with coverage...'",
-    "hatch run test-cov",
+    "hatch run all:test-cov",
     "echo 'Step 4: Building package...'",
     "hatch build",
     "echo 'Step 5: Checking built package...'",
