@@ -218,7 +218,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         thread_id = str(config["configurable"]["thread_id"])
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
-        async with self._get_s3_client() as s3_client:
+        async with self.lock, self._get_s3_client() as s3_client:
             if checkpoint_id := get_checkpoint_id(config):
                 # Get specific checkpoint
                 key = get_checkpoint_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
@@ -311,7 +311,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         writes_prefix = get_writes_prefix(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
         writes = []
 
-        async with self._get_s3_client() as s3_client:
+        async with self.lock, self._get_s3_client() as s3_client:
             try:
                 paginator = s3_client.get_paginator("list_objects_v2")
                 page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=writes_prefix)
@@ -383,7 +383,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         if before:
             before_checkpoint_id = get_checkpoint_id(before)
 
-        async with self._get_s3_client() as s3_client:
+        async with self.lock, self._get_s3_client() as s3_client:
             try:
                 paginator = s3_client.get_paginator("list_objects_v2")
                 page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
@@ -477,7 +477,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         checkpoint_data = serialize_checkpoint_data(checkpoint, full_metadata, self.serde)
         key = get_checkpoint_key(self.prefix, thread_id, checkpoint_ns, checkpoint_id)
 
-        async with self._get_s3_client() as s3_client:
+        async with self.lock, self._get_s3_client() as s3_client:
             try:
                 await s3_client.put_object(
                     Bucket=self.bucket_name,
@@ -521,7 +521,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = str(config["configurable"]["checkpoint_id"])
 
-        async with self._get_s3_client() as s3_client:
+        async with self.lock, self._get_s3_client() as s3_client:
             try:
                 # Use asyncio.gather to upload writes concurrently
                 tasks = []
@@ -563,7 +563,7 @@ class AsyncS3CheckpointSaver(BaseCheckpointSaver[str]):
             f"{self.prefix}writes/{thread_id}/",
         ]
 
-        async with self._get_s3_client() as s3_client:
+        async with self.lock, self._get_s3_client() as s3_client:
             try:
                 for prefix in prefixes:
                     paginator = s3_client.get_paginator("list_objects_v2")
